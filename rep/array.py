@@ -8,12 +8,37 @@ class FixedArray(collections.abc.MutableSequence):
     def __len__(self):
         return len(self.doc) // self._itemsize
     def __getitem__(self, slice):
-        start, stop, step = slice.indices(len(self))
         sz = self._itemsize
-        data = self.doc[start * sz : stop * sz]
-        return [data[off:off+sz] for off in range(0,len(data),sz)][::step]
+        if type(slice) is int:
+            return self.doc[slice * sz : (slice + 1) * sz]
+        else:
+            start, stop, step = slice.indices(len(self))
+            data = self.doc[start * sz : stop * sz]
+            return [data[off:off+sz] for off in range(0,len(data),sz)][::step]
+    def __iter__(self):
+        sz = self._itemsize
+        buf = bytearray()
+        szminusbuflen = sz
+        for region in self.doc:
+            regionlen = len(region)
+            if regionlen < szminusbuflen:
+                buf += region
+                szminusbuflen -= regionlen
+                continue
+            yield buf + region[:szminusbuflen]
+            buflen = (regionlen - szminusbuflen) % sz
+            tailoff = regionlen - buflen
+            for off in range(szminusbuflen, tailoff, sz):
+                yield region[off:off+sz]
+            buf[:] = region[tailoff:]
+            szminusbuflen = sz - buflen
+        assert szminusbuflen == sz
     def __setitem__(self, slice, values):
-        start, stop, step = slice.indices(len(self))
+        if type(slice) is int:
+            start, stop, step = [slice, slice + 1, 1]
+            values = [values]
+        else:
+            start, stop, step = slice.indices(len(self))
         sz = self._itemsize
         dbg_startlen = len(self)
         data = IterableToBytes(len(values) * sz, values)
@@ -41,10 +66,20 @@ class Array(FixedArray):
         self._fetch = rep.manager.fetch
     def __getitem__(self, slice):
         fetch = self._fetch
-        return [fetch(id) for id in super().__getitem__(slice)]
+        if type(slice) is int:
+            return fetch(super().__getitem__(slice))
+        else:
+            return [fetch(id) for id in super().__getitem__(slice)]
+    def __iter__(self):
+        fetch = self._fetch
+        for id in super().__iter__():
+            yield fetch(id)
     def __setitem__(self, slice, values):
         alloc = self._alloc
-        super().__setitem__(slice, IterableWithLength((alloc(value) for value in values), len(values)))
+        if type(slice) is int:
+            super().__setitem__(slice, alloc(values))
+        else:
+            super().__setitem__(slice, IterableWithLength((alloc(value) for value in values), len(values)))
 
 if __name__ == '__main__':
     import random, tqdm
@@ -66,4 +101,5 @@ if __name__ == '__main__':
             doc[dest[0]:dest[1]] = srcs
             cmp[dest[0]:dest[1]] = srcs
             assert cmp == doc[:]
+            assert cmp == list(doc)
             pbar.desc = b','.join(cmp).decode()

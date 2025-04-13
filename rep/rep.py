@@ -1,5 +1,7 @@
 from .r import aR as manager
 
+import tqdm
+
 class Rep:
     def __init__(self, manager=manager()):
         self.manager = manager
@@ -37,6 +39,10 @@ class Document:
         #base, start_id, outer, stop_id = self._id_base_start_stop(start, stop)
         data = b''.join([self.rep.manager.fetch(id) for id in self._ids[start_id:stop_id]])
         return data[start - base : stop - base : stride]
+
+    def __iter__(self):
+        for id in self._ids:
+            yield self.rep.manager.fetch(id)
 
     def __setitem__(self, slice, data):
         _dbg_old_data = bytearray(self[:])
@@ -84,7 +90,7 @@ class ResizeableDocument:
         return [idx, off - self._offs[idx]]
     def fsck(self):
         assert 0 not in self._sizes
-        assert self._sizes == [self.rep.manager.fetch_size(id) for id in self._ids]
+        assert self._sizes == [self.rep.manager.fetch_size(id) for id in tqdm.tqdm(self._ids, desc='fsck sizes', leave=False)]
         assert self._offs == list(itertools.accumulate(self._sizes, initial=0))
     def __len__(self):
         return self._offs[-1]
@@ -114,6 +120,9 @@ class ResizeableDocument:
         data = b''.join(datas)[::step]
         assert len(data) == (stop - start) // step
         return data
+    def __iter__(self):
+        for id in self._ids:
+            yield self.rep.manager.fetch(id)
     def __setitem__(self, slice, data):
         start, stop, step = slice.indices(len(self))
         assert step == 1
@@ -158,7 +167,7 @@ class ResizeableDocument:
                 new_ids.append(alloc(piece))
             tail = data[offs[-1]:]
             suffixoff = sz - len(tail)
-            piece = data + suffix[:suffixoff]
+            piece = tail + suffix[:suffixoff]
             new_sizes.append(len(piece))
             new_ids.append(alloc(piece))
         if suffixoff < suffixlen:
