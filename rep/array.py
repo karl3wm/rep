@@ -1,20 +1,6 @@
 from .rep import ResizeableDocument, Rep, IterableToBytes, IterableWithLength
 import collections
 
-# often i want to fill an array with a lot of data at once
-# or process a lot of items from an array
-# implementing __iter__ well could help with processing many.
-# what about filling? .extend() and __setitem__(slice) can leave a trailing end
-# maybe a context for filling a lot at once
-# or maybe we'd just store partial data while writing ...
-# what if i could pass an iterable, and generate the data :) this might work
-
-# might mean letting doc accept some kind of bytes-stream
-
-# when passing bytes from FixedArray say
-# it iterates over a sequence of items and generates bytes as it iterates.
-# it could provide a generator in theory -- an iterable of bytes
-
 class FixedArray(collections.abc.MutableSequence):
     def __init__(self, itemsize, id=b'', rep=Rep()):
         self.doc = ResizeableDocument(id, rep)
@@ -31,7 +17,6 @@ class FixedArray(collections.abc.MutableSequence):
         sz = self._itemsize
         dbg_startlen = len(self)
         data = IterableToBytes(len(values) * sz, values)
-        #assert len(data) == len(values) * sz
         self.doc[start * sz : stop * sz] = data
         assert len(self) == dbg_startlen + len(values) - (stop - start)
     def __delitem__(self, slice):
