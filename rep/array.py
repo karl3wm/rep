@@ -1,5 +1,19 @@
-from .rep import ResizeableDocument, Rep
+from .rep import ResizeableDocument, Rep, IterableToBytes, IterableWithLength
 import collections
+
+# often i want to fill an array with a lot of data at once
+# or process a lot of items from an array
+# implementing __iter__ well could help with processing many.
+# what about filling? .extend() and __setitem__(slice) can leave a trailing end
+# maybe a context for filling a lot at once
+# or maybe we'd just store partial data while writing ...
+# what if i could pass an iterable, and generate the data :) this might work
+
+# might mean letting doc accept some kind of bytes-stream
+
+# when passing bytes from FixedArray say
+# it iterates over a sequence of items and generates bytes as it iterates.
+# it could provide a generator in theory -- an iterable of bytes
 
 class FixedArray(collections.abc.MutableSequence):
     def __init__(self, itemsize, id=b'', rep=Rep()):
@@ -16,8 +30,8 @@ class FixedArray(collections.abc.MutableSequence):
         start, stop, step = slice.indices(len(self))
         sz = self._itemsize
         dbg_startlen = len(self)
-        data = b''.join(values)
-        assert len(data) == len(values) * sz
+        data = IterableToBytes(len(values) * sz, values)
+        #assert len(data) == len(values) * sz
         self.doc[start * sz : stop * sz] = data
         assert len(self) == dbg_startlen + len(values) - (stop - start)
     def __delitem__(self, slice):
@@ -45,7 +59,7 @@ class Array(FixedArray):
         return [fetch(id) for id in super().__getitem__(slice)]
     def __setitem__(self, slice, values):
         alloc = self._alloc
-        super().__setitem__(slice, [alloc(value) for value in values])
+        super().__setitem__(slice, IterableWithLength((alloc(value) for value in values), len(values)))
 
 if __name__ == '__main__':
     import random, tqdm

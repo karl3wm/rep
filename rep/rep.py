@@ -137,27 +137,77 @@ class ResizeableDocument:
         datalen = len(data)
         sz = self._allocsize
 
+        new_ids = []
+        new_sizes = []
+        alloc = self.rep.manager.alloc
         if prefixlen + datalen < sz:
             suffixoff = sz - prefixlen - datalen
-            data_array = [prefix + data + suffix[:suffixoff]] if suffixlen + prefixlen + datalen > 0 else []
+            if suffixlen + prefixlen + datalen > 0:
+                piece = prefix + data[:] + suffix[:suffixoff]
+                new_sizes.append(len(piece))
+                new_ids.append(alloc(piece))
         else:
             off = sz - prefixlen
-            data_array = [prefix + data[:off]] + [
-                data[off:off+sz]
-                for off in range(off, datalen, sz)
-            ]
-            suffixoff = sz - len(data_array[-1])
-            data_array[-1] += suffix[:suffixoff]
+            piece = prefix + data[:off]
+            new_sizes.append(len(piece))
+            new_ids.append(alloc(piece))
+            offs = list(range(off, datalen, sz))
+            for off in offs[:-1]:
+                piece = data[off:off+sz]
+                new_sizes.append(len(piece))
+                new_ids.append(alloc(piece))
+            tail = data[offs[-1]:]
+            suffixoff = sz - len(tail)
+            piece = data + suffix[:suffixoff]
+            new_sizes.append(len(piece))
+            new_ids.append(alloc(piece))
         if suffixoff < suffixlen:
-            data_array.append(suffix[suffixoff:])
-        self._ids[start_idx:stop_idx] = [self.rep.manager.alloc(data_item) for data_item in data_array]
-        self._sizes[start_idx:stop_idx] = [len(data_item) for data_item in data_array]
+            piece = suffix[suffixoff:]
+            new_sizes.append(len(piece))
+            new_ids.append(alloc(piece))
+        self._ids[start_idx:stop_idx] = new_ids#[self.rep.manager.alloc(data_item) for data_item in data_array]
+        self._sizes[start_idx:stop_idx] = new_sizes#[len(data_item) for data_item in data_array]
         self._offs[start_idx:] = itertools.accumulate(self._sizes[start_idx:], initial=self._offs[start_idx])
         self.fsck()
     def __iadd__(self, data):
         # reusing setitem for coverage
         self[len(self):] = data
         return self
+
+class IterableToBytes:
+    def __init__(self, length, iterable):
+        self.length = length
+        self.iteration = iter(iterable)
+        self.offset = 0
+        self.buffer = bytearray()
+    def __len__(self):
+        return self.length
+    def __getitem__(self, slice):
+        start, stop, step = slice.indices(self.length)
+        assert start == self.offset
+        buf = self.buffer
+        length = stop - start
+        while len(buf) < length:
+            buf += next(self.iteration)
+        self.offset += length
+        if self.offset == self.length:
+            try:
+                next(self.iteration)
+                assert not 'length shorter than data'
+            except StopIteration:
+                pass
+        result = buf[:length][::step]
+        buf[:length] = b''
+        return result
+
+class IterableWithLength:
+    def __init__(self, iter, length):
+        self.iter = iter
+        self.length = length
+    def __len__(self):
+        return self.length
+    def __iter__(self):
+        return iter(self.iter)
 
 if __name__ == '__main__':
     import random, tqdm
@@ -169,13 +219,13 @@ if __name__ == '__main__':
     cmp += text
     assert doc[:] == cmp
     with tqdm.tqdm(range(24), desc=cmp.decode(), leave=False) as pbar:
-        for iter in pbar:
+        for it in pbar:
             dest = [random.randint(0,len(doc)) for x in range(2)]
             dest.sort()
             src = [random.randint(0,len(text)) for x in range(2)]
             src.sort()
             assert doc[dest[0]:dest[1]] == cmp[dest[0]:dest[1]]
-            doc[dest[0]:dest[1]] = text[src[0]:src[1]]
+            doc[dest[0]:dest[1]] = IterableToBytes(src[1]-src[0], [text[src[0]:(src[0]+src[1])//2],text[(src[0]+src[1])//2:src[1]]])
             cmp[dest[0]:dest[1]] = text[src[0]:src[1]]
             assert cmp == doc[:]
             pbar.desc = cmp.decode()
