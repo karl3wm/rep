@@ -10,6 +10,8 @@ class FixedArray(collections.abc.MutableSequence):
     def __getitem__(self, slice):
         sz = self._itemsize
         if type(slice) is int:
+            if slice < 0 or slice >= len(self):
+                raise IndexError('index out of range')
             return self.doc[slice * sz : (slice + 1) * sz]
         else:
             start, stop, step = slice.indices(len(self))
@@ -36,6 +38,8 @@ class FixedArray(collections.abc.MutableSequence):
     def __setitem__(self, slice, values):
         if type(slice) is int:
             start, stop, step = [slice, slice + 1, 1]
+            if start < 0 or start >= len(self):
+                raise IndexError('index out of range')
             values = [values]
         else:
             start, stop, step = slice.indices(len(self))
