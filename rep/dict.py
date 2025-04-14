@@ -10,8 +10,11 @@ def hash(bytes):
     hash.update(bytes)
     return hash.finalize()
 
-# the current dict approach grows the size first to 256 then 64k
-# but since the hash is never written it would be fine to use a bitcount rather than a bytecount for more reasonable storage usage for small dicts
+# the following ideas were encountered:
+# - the loop where the growth amount is measured could be simplified into a bitwise check between the hashes if such a check exists.
+#   it could at least have other content pulled out of the loop.
+# - by using little-endian instead of big-endian keyhash expansion, growth could be zero-allocation by imaging pages.
+#   this implies either not tracking presence or using a different method than a sentinel to do so.
 
 # approaches to dicts:
 #   - header free
@@ -26,8 +29,12 @@ def hash(bytes):
 #           this is maybe normal helpful, provides for things like bucket usage
 #   - holding key/keyhash
 #           makes resizing much easier, can reindex
+#   - cloning tables to grow
+#           efficient constant allocation, leaves data in unallocated areas, might use little-endian hashing
 
 class FixedDict(collections.abc.MutableMapping):
+    # this approach expands on collisions.
+    # so every fetch encounters at most one value, because collisions always make sparsity
     def __init__(self, itemsize, key, id=b'', rep=Rep()):
         self._itemsize = itemsize
         self._key = key
@@ -35,52 +42,73 @@ class FixedDict(collections.abc.MutableMapping):
         self.array = FixedArray(self._itemsize, id, rep)
         self._capacity = len(self.array)
         self._sentinel = bytes(self._itemsize)
+        self._hashbits = self._capacity.bit_length()
         if self._capacity > 0:
-            self._hashbytes = ((self._capacity-1).bit_length()-1) // 8 + 1
-            assert 1<<(self._hashbytes<<3) == self._capacity
+            self._hashbits = (self._capacity-1).bit_length()
+            assert 1<<(self._hashbits) == self._capacity
         else:
-            self._hashbytes = 0
+            self._hashbits = 0
+        self._hashbytes = (self._hashbits+7) >> 3
+        self._hashshift = (self._hashbytes << 3) - self._hashbits
     def __len__(self):
         raise NotImplementedError('len(FixedDict)')
     def __getitem__(self, keyhash):
-        # some interest in an approach that expands on collisions.
-        # this means every fetch either finds zeros or a single value, because collisions always make sparsity
-        idx = int.from_bytes(keyhash[:self._hashbytes], 'big')
+        idx = int.from_bytes(keyhash[:self._hashbytes], 'big') >> self._hashshift
         return self.array[idx]
     def __setitem__(self, keyhash, item):
         assert self._key(item) == keyhash # interestingly this is the same as a set
         if self._capacity == 0:
-            self.array[:] = [self._sentinel] * 256
-            self._capacity = 256
+            self._capacity = 2
             self._hashbytes = 1
+            self._hashbits = 1
+            self._hashshift = 7
+            self.array[:] = [self._sentinel, self._sentinel]
         assert item != self._sentinel
-        while True:
-            idx = int.from_bytes(keyhash[:self._hashbytes], 'big')
-            place = self.array[idx]
-            if place == self._sentinel or self._key(place) == keyhash:
-                break
-            def content_generator():
-                for superidx, item in enumerate(tqdm.tqdm(self.array, desc='growing hashtable', leave=False)):
-                    if item == self._sentinel:
-                        yield from [self._sentinel] * 256
-                    else:
-                        keyhash = self._key(item)
-                        assert int.from_bytes(keyhash[:self._hashbytes], 'big') == superidx
-                        subidx = keyhash[self._hashbytes]
-                        yield from [self._sentinel] * subidx
-                        yield item
-                        yield from [self._sentinel] * (255 - subidx)
-
-            self.array[:] = IterableWithLength(content_generator(), self._capacity * 256)
-            self._capacity *= 256
-            self._hashbytes += 1
+        idx = int.from_bytes(keyhash[:self._hashbytes], 'big') >> self._hashshift
+        place = self.array[idx]
+        if place != self._sentinel:
+            collision = self._key(place)
+            if collision != keyhash:
+                assert idx == int.from_bytes(collision[:self._hashbytes], 'big') >> self._hashshift
+                spread = 0
+                while True:
+                    spread += 1
+                    hashbits = self._hashbits + spread
+                    expansion = 1 << spread
+                    hashbytes = (hashbits+7) >> 3
+                    hashshift = (hashbytes << 3) - hashbits
+                    idx = int.from_bytes(keyhash[:hashbytes], 'big') >> hashshift
+                    if idx != int.from_bytes(collision[:hashbytes], 'big') >> hashshift:
+                        break
+                capacity = self._capacity * expansion
+                assert 1 << hashbits == capacity
+                expansionmask = expansion - 1
+                def content_generator():
+                    for superidx, item in enumerate(tqdm.tqdm(self.array, desc='growing hashtable', leave=False)):
+                        if item == self._sentinel:
+                            yield from [self._sentinel] * expansion
+                        else:
+                            keyhash = self._key(item)
+                            wholeidx = int.from_bytes(keyhash[:hashbytes], 'big')
+                            assert superidx == wholeidx >> (hashbytes * 8 - self._hashbits)
+                            subidx = (wholeidx >> hashshift) & expansionmask
+                            assert superidx * expansion + subidx == wholeidx >> hashshift
+                            yield from [self._sentinel] * subidx
+                            yield item
+                            yield from [self._sentinel] * (expansion - subidx - 1)
+                self.array[:] = IterableWithLength(content_generator(), self._capacity * expansion)
+                self._capacity = capacity
+                self._hashbits = hashbits
+                self._hashbytes = hashbytes
+                self._hashshift = hashshift
+                dict(self.items()) # fsckish
         self.array[idx] = item
     def __iter__(self):
         for item in self.array:
             if item != self._sentinel:
                 yield [self._key(item), item]
     def __delitem__(self, keyhash):
-        idx = int.from_bytes(keyhash[:self._hashbytes], 'big')
+        idx = int.from_bytes(keyhash[:self._hashbytes], 'big') >> self._hashshift
         assert self.array[idx] != self._sentinel
         self.array[idx] = self._sentinel
 
@@ -105,13 +133,14 @@ class Dict(FixedDict):
     def __setitem__(self, key, val):
         # if the item is present already, then only the second half of the key need be updated
         keyhash = hash(key)
-        storedkeyval = super().__getitem__(keyhash)
         alloc = self._alloc
-        if storedkeyval != self._sentinel:
-            storedkeyid = storedkeyval[:self._idsize]
-            storedkey = self._fetch(storedkeyid)
-            if storedkey == key:
-                return super().__setitem__(keyhash, storedkeyid + alloc(val))
+        if self._capacity > 0:
+            storedkeyval = super().__getitem__(keyhash)
+            if storedkeyval != self._sentinel:
+                storedkeyid = storedkeyval[:self._idsize]
+                storedkey = self._fetch(storedkeyid)
+                if storedkey == key:
+                    return super().__setitem__(keyhash, storedkeyid + alloc(val))
         super().__setitem__(keyhash, alloc(key) + alloc(val))
     def keys(self):
         sz = self._idsize
@@ -120,7 +149,7 @@ class Dict(FixedDict):
         for idx, storedkeyval in enumerate(self.array):
             if storedkeyval != sentinel:
                 key = fetch(storedkeyval[:sz])
-                assert int.from_bytes(hash(key)[:self._hashbytes], 'big') == idx
+                assert idx == int.from_bytes(hash(key)[:self._hashbytes], 'big') >> self._hashshift
                 yield key
     def values(self):
         raise NotImplementedError() # values implies not checking keyhashes
@@ -131,7 +160,7 @@ class Dict(FixedDict):
         for idx, storedkeyval in enumerate(self.array):
             if storedkeyval != sentinel:
                 key = fetch(storedkeyval[:sz])
-                assert int.from_bytes(hash(key)[:self._hashbytes], 'big') == idx
+                assert idx == int.from_bytes(hash(key)[:self._hashbytes], 'big') >> self._hashshift
                 yield [key, fetch(storedkeyval[sz:])]
     def __iter__(self):
         return self.keys()
@@ -148,7 +177,7 @@ class Dict(FixedDict):
 if __name__ == '__main__':
     doc = Dict()
     cmp = {}
-    for x in tqdm.tqdm(range(257)):
+    for x in tqdm.tqdm(range(17)):
         val = str(x).encode()
         doc[val] = val
         cmp[val] = val
