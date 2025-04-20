@@ -3,7 +3,9 @@ from .r import aR as manager
 import tqdm
 
 class Rep:
-    def __init__(self, manager=manager()):
+    def __init__(self, manager=manager, *manager_params, **manager_kwparams):
+        if type(manager) is type:
+            manager = manager(*manager_params, **manager_kwparams)
         self.manager = manager
     def alloc(self, data):
         sz = self.manager.allocsize
@@ -19,7 +21,9 @@ class Rep:
         ])
 
 class Document:
-    def __init__(self, id=b'', rep=Rep()):
+    def __init__(self, id=b'', rep=Rep, *rep_params, **rep_kwparams):
+        if type(rep) is type:
+            rep = rep(*rep_params, **rep_kwparams)
         self.rep = rep
         self._idsize = self.rep.manager.idsize
         self._allocsize = self.rep.manager.allocsize
@@ -74,7 +78,9 @@ class Document:
 
 import bisect, itertools
 class ResizeableDocument:
-    def __init__(self, id=b'', rep=Rep()):
+    def __init__(self, id=b'', rep=Rep, *rep_params, **rep_kwparams):
+        if type(rep) is type:
+            rep = rep(*rep_params, **rep_kwparams)
         self.rep = rep
         self._idsize = self.rep.manager.idsize
         self._allocsize = self.rep.manager.allocsize
@@ -82,12 +88,18 @@ class ResizeableDocument:
         self._ids = [id[off:off+sz] for off in range(0, len(id), sz)]
         self._sizes = [self.rep.manager.fetch_size(id) for id in self._ids]
         self._offs = list(itertools.accumulate(self._sizes, initial=0))
+    @property
+    def id(self):
+        return b''.join(self._ids)
     def _idx2off(self, idx):
         return sum(self._sizes[:idx])
     def _off2idxoff(self, off, lo=0, hi=None):
         idx = bisect.bisect_right(self._offs, off, lo, hi) - 1
         assert off >= self._offs[idx]
         return [idx, off - self._offs[idx]]
+    def offset_to_id(self, offset):
+        idx, off = self._off2idxoff(offset)
+        return self._ids[idx]
     def fsck(self):
         assert 0 not in self._sizes
         assert self._sizes == [self.rep.manager.fetch_size(id) for id in tqdm.tqdm(self._ids, desc='fsck sizes', leave=False)]
@@ -178,6 +190,14 @@ class ResizeableDocument:
         self._sizes[start_idx:stop_idx] = new_sizes#[len(data_item) for data_item in data_array]
         self._offs[start_idx:] = itertools.accumulate(self._sizes[start_idx:], initial=self._offs[start_idx])
         self.fsck()
+    def update(self, *start_stop_data):
+        start_stop_data = list(start_stop_data)
+        start_stop_data.sort()
+        # group them by id
+        # i'm not sure i have the capacity rn to implement this algorithm reasonably. some parts expressing a lot of hopelessness/etc repeatedly/persistently/aggressively
+            # irritating. we're looking for a simpler way to make the structures usable.
+            # basically, dicts are sparse. we'd like to perform a number of updates at once.
+            # i guess that means fetching each id, and placing new data into it at once.
     def __iadd__(self, data):
         # reusing setitem for coverage
         self[len(self):] = data
@@ -201,7 +221,7 @@ class IterableToBytes:
         self.offset += length
         if self.offset == self.length:
             try:
-                next(self.iteration)
+                extra_value = next(self.iteration)
                 assert not 'length shorter than data'
             except StopIteration:
                 pass

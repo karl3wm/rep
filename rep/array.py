@@ -2,9 +2,12 @@ from .rep import ResizeableDocument, Rep, IterableToBytes, IterableWithLength
 import collections
 
 class FixedArray(collections.abc.MutableSequence):
-    def __init__(self, itemsize, id=b'', rep=Rep()):
-        self.doc = ResizeableDocument(id, rep)
+    def __init__(self, itemsize, id=b'', rep=Rep, *rep_params, **rep_kwparams):
+        self.doc = ResizeableDocument(id, rep, *rep_params, **rep_kwparams)
         self._itemsize = itemsize
+    @property
+    def id(self):
+        return self.doc.id
     def __len__(self):
         return len(self.doc) // self._itemsize
     def __getitem__(self, slice):
@@ -17,6 +20,10 @@ class FixedArray(collections.abc.MutableSequence):
             start, stop, step = slice.indices(len(self))
             data = self.doc[start * sz : stop * sz]
             return [data[off:off+sz] for off in range(0,len(data),sz)][::step]
+    def index_to_id(self, index):
+        id = self.doc.offset_to_id(index * sz)
+        assert self.doc.offset_to_id(index * sz + sz - 1) == id
+        return id
     def __iter__(self):
         sz = self._itemsize
         buf = bytearray()
@@ -52,6 +59,16 @@ class FixedArray(collections.abc.MutableSequence):
         self[slice] = []
     def insert(self, idx, value):
         self[idx:idx] = [value]
+    #def update(self, idxvaluesdict, **idxvalueskws):
+    #        # this is kind of a lot of implementations
+    #    #self.doc.update([
+    #    #    [start * sz, stop * sz, data]
+    #    #])
+    #    idxvalues = list(dict(idxvaluesdict).items()) + list(idxvalueskws.items())
+    #    idxvalues.sort()
+    #    last_idx = 0
+    #    for idx, value in idxvalues:
+            
     @property
     def itemsize(self):
         return self._itemsize
@@ -64,8 +81,8 @@ class FixedArray(collections.abc.MutableSequence):
         assert self._itemsize * length == len(self.doc)
 
 class Array(FixedArray):
-    def __init__(self, id=b'', rep=Rep()):
-        super().__init__(rep.manager.idsize, id, rep)
+    def __init__(self, id=b'', rep=Rep, *rep_params, **rep_kwparams):
+        super().__init__(rep.manager.idsize, id, rep, *rep_params, **rep_kwparams)
         self._alloc = rep.manager.alloc
         self._fetch = rep.manager.fetch
     def __getitem__(self, slice):

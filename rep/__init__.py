@@ -1,3 +1,3 @@
 from .rep import Rep, Document, ResizeableDocument
 from .array import FixedArray, Array
-#from .dict import Dict
+from .dict import FixedDict, Dict
