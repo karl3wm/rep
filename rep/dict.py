@@ -35,11 +35,11 @@ def hash(bytes):
 class FixedDict(collections.abc.MutableMapping):
     # this approach expands on collisions.
     # so every fetch encounters at most one value, because collisions always make sparsity
-    def __init__(self, itemsize, key, id=b'', rep=Rep, *rep_params, **rep_kwparams):
+    def __init__(self, itemsize, key, id=b'', rep=None):
         self._itemsize = itemsize
         self._key = key
-        self._rep = rep
-        self.array = FixedArray(self._itemsize, id, rep, *rep_params, **rep_kwparams)
+        self.array = FixedArray(self._itemsize, id, rep)
+        self._rep = self.array.doc.rep
         self._capacity = len(self.array)
         self._sentinel = bytes(self._itemsize)
         if self._capacity > 0:
@@ -292,11 +292,11 @@ class FixedDict(collections.abc.MutableMapping):
         self.array[idx] = self._sentinel
 
 class Dict(FixedDict):
-    def __init__(self, id=b'', rep=Rep, *rep_params, **rep_kwparams):
-        super().__init__(rep.manager.idsize*2, self._key, id, rep, *rep_params, **rep_kwparams)
-        self._alloc = rep.manager.alloc
-        self._fetch = rep.manager.fetch
-        self._idsize = rep.manager.idsize
+    def __init__(self, id=b'', rep=None):
+        super().__init__(rep.manager.idsize*2, self._key, id, rep)
+        self._alloc = self._rep.manager.alloc
+        self._fetch = self._rep.manager.fetch
+        self._idsize = self._rep.manager.idsize
         self._keycache = {}
     def _key(self, keyval):
         return hash(self._fetch(keyval[:self._idsize]))
@@ -311,18 +311,6 @@ class Dict(FixedDict):
         raise KeyError(key)
     def __setitem__(self, key, val):
         self.update([key, val])
-    #def __setitem__(self, key, val):
-    #    # if the item is present already, then only the second half of the key need be updated
-    #    keyhash = hash(key)
-    #    alloc = self._alloc
-    #    if self._capacity > 0:
-    #        storedkeyval = super().__getitem__(keyhash)
-    #        if storedkeyval != self._sentinel:
-    #            storedkeyid = storedkeyval[:self._idsize]
-    #            storedkey = self._fetch(storedkeyid)
-    #            if storedkey == key:
-    #                return super().__setitem__(keyhash, storedkeyid + alloc(val))
-    #    super().__setitem__(keyhash, alloc(key) + alloc(val))
     def update(self, keyitemseq = {}, **keyitemkws):
         # when/if parallel allocs are used, this function would need to be reorganized to use them.
         alloc = self._alloc

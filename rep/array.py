@@ -2,8 +2,8 @@ from .rep import ResizeableDocument, Rep, IterableToBytes, IterableWithLength
 import collections
 
 class FixedArray(collections.abc.MutableSequence):
-    def __init__(self, itemsize, id=b'', rep=Rep, *rep_params, **rep_kwparams):
-        self.doc = ResizeableDocument(id, rep, *rep_params, **rep_kwparams)
+    def __init__(self, itemsize, id=b'', rep=None):
+        self.doc = ResizeableDocument(id, rep)
         self._itemsize = itemsize
     @property
     def id(self):
@@ -81,9 +81,9 @@ class FixedArray(collections.abc.MutableSequence):
         assert self._itemsize * length == len(self.doc)
 
 class Array(FixedArray):
-    def __init__(self, id=b'', rep=Rep, *rep_params, **rep_kwparams):
-        if type(rep) is type:
-            rep = rep(*rep_params, **rep_kwparams)
+    def __init__(self, id=b'', rep=None):
+        if rep is None:
+            rep = Rep()
         super().__init__(rep.manager.idsize, id, rep)
         self._alloc = rep.manager.alloc
         self._fetch = rep.manager.fetch

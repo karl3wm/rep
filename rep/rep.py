@@ -3,9 +3,9 @@ from .r import aR as manager
 import tqdm
 
 class Rep:
-    def __init__(self, manager=manager, *manager_params, **manager_kwparams):
-        if type(manager) is type:
-            manager = manager(*manager_params, **manager_kwparams)
+    def __init__(self, manager=None):
+        if manager is None:
+            manager = globals()['manager']()
         self.manager = manager
     def alloc(self, data):
         sz = self.manager.allocsize
@@ -21,9 +21,9 @@ class Rep:
         ])
 
 class Document:
-    def __init__(self, id=b'', rep=Rep, *rep_params, **rep_kwparams):
-        if type(rep) is type:
-            rep = rep(*rep_params, **rep_kwparams)
+    def __init__(self, id=b'', rep=None):
+        if rep is None:
+            rep = Rep()
         self.rep = rep
         self._idsize = self.rep.manager.idsize
         self._allocsize = self.rep.manager.allocsize
@@ -78,9 +78,9 @@ class Document:
 
 import bisect, itertools
 class ResizeableDocument:
-    def __init__(self, id=b'', rep=Rep, *rep_params, **rep_kwparams):
-        if type(rep) is type:
-            rep = rep(*rep_params, **rep_kwparams)
+    def __init__(self, id=b'', rep=None):
+        if rep is None:
+            rep = Rep()
         self.rep = rep
         self._idsize = self.rep.manager.idsize
         self._allocsize = self.rep.manager.allocsize
