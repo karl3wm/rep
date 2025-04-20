@@ -82,7 +82,9 @@ class FixedArray(collections.abc.MutableSequence):
 
 class Array(FixedArray):
     def __init__(self, id=b'', rep=Rep, *rep_params, **rep_kwparams):
-        super().__init__(rep.manager.idsize, id, rep, *rep_params, **rep_kwparams)
+        if type(rep) is type:
+            rep = rep(*rep_params, **rep_kwparams)
+        super().__init__(rep.manager.idsize, id, rep)
         self._alloc = rep.manager.alloc
         self._fetch = rep.manager.fetch
     def __getitem__(self, slice):
