@@ -239,26 +239,28 @@ class IterableWithLength:
         return iter(self.iter)
 
 if __name__ == '__main__':
-    import random, tqdm
-    text = b'The quick brown fox jumped over the lazy dog.'
-    doc = ResizeableDocument()
-    cmp = bytearray()
-    assert doc[:] == cmp
-    doc += text
-    cmp += text
-    assert doc[:] == cmp
-    with tqdm.tqdm(range(24), desc=cmp.decode(), leave=False) as pbar:
-        for it in pbar:
-            dest = [random.randint(0,len(doc)) for x in range(2)]
-            dest.sort()
-            src = [random.randint(0,len(text)) for x in range(2)]
-            src.sort()
-            assert doc[dest[0]:dest[1]] == cmp[dest[0]:dest[1]]
-            doc[dest[0]:dest[1]] = IterableToBytes(src[1]-src[0], [text[src[0]:(src[0]+src[1])//2],text[(src[0]+src[1])//2:src[1]]])
-            cmp[dest[0]:dest[1]] = text[src[0]:src[1]]
-            assert cmp == doc[:]
-            pbar.desc = cmp.decode()
-
-    doc += text
-    cmp += text
-    assert doc[:] == cmp
+    import random, tqdm, time
+    for seed in [1745156337, int(time.time())]:
+        print(f'random.seed({seed})')
+        random.seed(seed)
+        text = b'The quick brown fox jumped over the lazy dog.'
+        doc = ResizeableDocument()
+        cmp = bytearray()
+        assert doc[:] == cmp
+        doc += text
+        cmp += text
+        assert doc[:] == cmp
+        with tqdm.tqdm(range(24), desc=cmp.decode(), leave=False) as pbar:
+            for it in pbar:
+                dest = [random.randint(0,len(doc)) for x in range(2)]
+                dest.sort()
+                src = [random.randint(0,len(text)) for x in range(2)]
+                src.sort()
+                assert doc[dest[0]:dest[1]] == cmp[dest[0]:dest[1]]
+                doc[dest[0]:dest[1]] = IterableToBytes(src[1]-src[0], [text[src[0]:(src[0]+src[1])//2],text[(src[0]+src[1])//2:src[1]]])
+                cmp[dest[0]:dest[1]] = text[src[0]:src[1]]
+                assert cmp == doc[:]
+                pbar.desc = cmp.decode()
+        doc += text
+        cmp += text
+        assert doc[:] == cmp
