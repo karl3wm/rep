@@ -59,54 +59,6 @@ class FixedDict(collections.abc.MutableMapping):
         return self.array[idx]
     def __setitem__(self, keyhash, item):
         self.update({keyhash:item})
-    #def __setitem__(self, keyhash, item):
-    #    assert self._key(item) == keyhash # interestingly this is the same as a set
-    #    if self._capacity == 0:
-    #        self._capacity = 2
-    #        self._hashbytes = 1
-    #        self._hashbits = 1
-    #        self._hashshift = 7
-    #        self.array[:] = [self._sentinel, self._sentinel]
-    #    assert item != self._sentinel
-    #    idx = int.from_bytes(keyhash[:self._hashbytes], 'big') >> self._hashshift
-    #    place = self.array[idx]
-    #    if place != self._sentinel:
-    #        collision = self._key(place)
-    #        if collision != keyhash:
-    #            assert idx == int.from_bytes(collision[:self._hashbytes], 'big') >> self._hashshift
-    #            spread = 0
-    #            while True:
-    #                spread += 1
-    #                hashbits = self._hashbits + spread
-    #                expansion = 1 << spread
-    #                hashbytes = (hashbits+7) >> 3
-    #                hashshift = (hashbytes << 3) - hashbits
-    #                idx = int.from_bytes(keyhash[:hashbytes], 'big') >> hashshift
-    #                if idx != int.from_bytes(collision[:hashbytes], 'big') >> hashshift:
-    #                    break
-    #            capacity = self._capacity * expansion
-    #            assert 1 << hashbits == capacity
-    #            expansionmask = expansion - 1
-    #            def content_generator():
-    #                for superidx, item in enumerate(tqdm.tqdm(self.array, desc='growing hashtable', leave=False)):
-    #                    if item == self._sentinel:
-    #                        yield from [self._sentinel] * expansion
-    #                    else:
-    #                        keyhash = self._key(item)
-    #                        wholeidx = int.from_bytes(keyhash[:hashbytes], 'big')
-    #                        assert superidx == wholeidx >> (hashbytes * 8 - self._hashbits)
-    #                        subidx = (wholeidx >> hashshift) & expansionmask
-    #                        assert superidx * expansion + subidx == wholeidx >> hashshift
-    #                        yield from [self._sentinel] * subidx
-    #                        yield item
-    #                        yield from [self._sentinel] * (expansion - subidx - 1)
-    #            self.array[:] = IterableWithLength(content_generator(), self._capacity * expansion)
-    #            self._capacity = capacity
-    #            self._hashbits = hashbits
-    #            self._hashbytes = hashbytes
-    #            self._hashshift = hashshift
-    #            dict(self.items()) # fsckish
-    #    self.array[idx] = item
     def update(self, keyhashitems):
         updates = {}
         expansion = 1
@@ -118,13 +70,14 @@ class FixedDict(collections.abc.MutableMapping):
 
         # i believe some of the storage representation here could be optimized away if that helps anything
         # was thinking i hadnt fully thought about storage updates as dicts vs list and its members
-            # it looks like a more optimized data structure could be a dict of superidx (original idx)
+            # it looked at one time like a more optimized data structure could be a dict of superidx (original idx)
             # containing sorted lists of either final idx==newidx or subidx
 
         for keyhash, item in keyhashitems:
             assert item != self._sentinel
             byteidx = int.from_bytes(keyhash[:hashbytes], 'big')
             newidx = byteidx >> hashshift
+            placings = []
             if self._capacity > 0:
                 # this block checks for collision with previous stored values
                 if capacity > self._capacity:
@@ -136,17 +89,16 @@ class FixedDict(collections.abc.MutableMapping):
                     collision = self._key(place)
                     if collision != keyhash:
                         assert superidx == int.from_bytes(collision[:self._hashbytes], 'big') >> self._hashshift
-                        updates[newidx] = [collision, place, False]
+                        placings.append([collision, place, False])
             # this separated approach to checking for collisions allows for accepting
             # batched data that ends up containing hash collisions solely within itself
             placing = updates.get(newidx)
             if placing is not None:
-                collision, place, is_new = placing
-                while newidx == int.from_bytes(collision[:hashbytes], 'big') >> hashshift:
+                placings.append(placing)
+            if len(placings):
+                while any([newidx == int.from_bytes(collision[:hashbytes], 'big') >> hashshift for collision, place, is_new in placings]):
                     capacity <<= 1
                     expansion <<= 1
-                    #spread += 1
-                    #hashbits = self._hashbits + spread
                     hashbits += 1
                     hashbytes = (hashbits+7) >> 3
                     hashshift = (hashbytes << 3) - hashbits
@@ -164,15 +116,16 @@ class FixedDict(collections.abc.MutableMapping):
             assert int.from_bytes(keyhash[:hashbytes], 'big') >> hashshift == newidx
             updates[newidx] = [keyhash, item, True]
         updates = [[newidx, keyhash, item] for newidx, [keyhash, item, is_new] in updates.items() if is_new]
+        assert len(updates) == len(keyhashitems)
         updates.sort(reverse=True)
 
         if capacity == self._capacity: # no expansion, newidx == idx == superidx
             allocsz = self._rep.manager.allocsize
             itemsz = self._itemsize
-            update_chunks = [[updates.pop()]]
+            update_chunks = [[updates.pop()]] if len(updates) else []
             while len(updates):
                 update = updates.pop()
-                if (update[0] + 1 - update_chunks[-1][-1][0]) * itemsz >= allocsize:
+                if (update[0] + 1 - update_chunks[-1][-1][0]) * itemsz >= allocsz:
                     update_chunks.append([update])
                 else:
                     update_chunks[-1].append(update)
@@ -184,7 +137,7 @@ class FixedDict(collections.abc.MutableMapping):
                     min_idx, min_keyhash, min_item = update_chunk[0]
                     max_idx, max_keyhash, max_item = update_chunk[-1]
                     content = [min_item] + self.array[min_idx+1:max_idx] + [max_item]
-                    for idx, item in update_chunk[1:-1]:
+                    for idx, keyhash, item in update_chunk[1:-1]:
                         content[idx-min_idx] = item
                     self.array[min_idx:max_idx+1] = content
                 update_chunk[:] = []
@@ -196,9 +149,8 @@ class FixedDict(collections.abc.MutableMapping):
                 expansionmask = expansion - 1
                 def newidx2subidx(newidx):
                     assert superidx == newidx >> (hashbits - self._hashbits)
-                    #subidx = (newidx >> hashshift) & expansionmask
                     subidx = newidx & expansionmask
-                    assert superidx * expansion + subidx == newidx# >> hashshift
+                    assert superidx * expansion + subidx == newidx
                     return subidx
                 for superidx, item in enumerate(tqdm.tqdm(self.array if self._capacity else [self._sentinel], desc='growing sentinel hashtable', leave=False)):
                     update_chunk = [self._sentinel] * expansion
@@ -206,19 +158,19 @@ class FixedDict(collections.abc.MutableMapping):
                         keyhash = self._key(item)
                         newidx = int.from_bytes(keyhash[:hashbytes], 'big') >> hashshift
                         update_chunk[newidx2subidx(newidx)] = item
-                    dbg_additions = []
+                    #dbg_additions = []
                     while next_superidx == superidx:
                         item = next_item
                         newidx = next_newidx
-                        dbg_additions.append([next_newidx, next_keyhash, next_item])
-                        assert int.from_bytes(self._key(next_item)[:hashbytes], 'big') >> hashshift == newidx
+                        #dbg_additions.append([next_newidx, next_keyhash, next_item])
+                        #assert int.from_bytes(self._key(next_item)[:hashbytes], 'big') >> hashshift == newidx
                         update_chunk[newidx2subidx(newidx)] = item
                         next_newidx, next_keyhash, next_item = updates.pop() if len(updates) else [1<<hashbits,None,None]
                         next_superidx = next_newidx >> (hashbits - self._hashbits)
-                    for subidx, item in enumerate(update_chunk):
-                        if item != self._sentinel:
-                            dbg_keyhash = self._key(item)
-                            assert superidx * expansion + subidx == int.from_bytes(dbg_keyhash[:hashbytes], 'big') >> hashshift
+                    #for subidx, item in enumerate(update_chunk):
+                    #    if item != self._sentinel:
+                    #        dbg_keyhash = self._key(item)
+                    #        assert superidx * expansion + subidx == int.from_bytes(dbg_keyhash[:hashbytes], 'big') >> hashshift
                     yield from update_chunk
                     del update_chunk
 
@@ -230,58 +182,7 @@ class FixedDict(collections.abc.MutableMapping):
             self._hashbits = hashbits
             self._hashbytes = hashbytes
             self._hashshift = hashshift
-            dict(self.items()) # fsckish
-
-#        # below legacy draft
-#
-#            # this is sparse placement
-#            # whether it's implemented here or in a multiupdate function
-#            # at a lower level, basically what will happen is fetching the
-#            # record, changing the values that are in it, and placing it back
-#
-#            # now, the current implementation places an update for each id.
-#            # but actually we only need an update for each allocsize !
-#                # a maximal update could be allocsize/itemsize large,
-#                # extending from either end of an existing id.
-#                # but mostly is only useful if it covers ids fully.
-#
-#            # another option is to rewrite the entire range of updates.
-#            
-#            # a reasonable simplification would be to rewrite in sequences that have gaps no larger than allocsize/itemsize.
-#
-#            def content_generator(sorted_id_updates):
-#                for idx in range(len(sorted_id_updates)-1):
-#                    yield sorted_id_updates[idx]
-#                    yield array
-#            for id, id_updates in updates.items():
-#                if len(id_updates) == 1:
-#                    idx, item = id_updates[0]
-#                    self.array[idx] = item
-#                else:
-#                    id_updates.sort()
-#                    min_idx, min_item = id_updates[0]
-#                    max_idx, max_item = id_updates[-1]
-#                    content = [min_item] + self.array[min_idx+1:max_idx] + [max_item]
-#                    for idx, item in id_updates[1:-1]:
-#                        content[idx-min_idx] = item
-#                    self.array[min_idx:max_idx+1] = content
-#                
-#                content = FixedArray(self._itemsize, id, rep=self._rep)
-#                items = [*content]
-#                for idx, item in id_updates:
-#                    items[idx] = item
-#
-#                # i've shrunk the task to make easier and more completable.
-#
-#        # the plan is to calculate all the keyhashes in advance
-#        # sending the changes well is helped if there's a way to group indices into their underlying records
-#        total_assignments = len(dict) + len(kwvalues)
-#        if self._capacity == 0:
-#            self._capacity = 2
-#            self._hashbytes = 1
-#            self._hashbits = 1
-#            self._hashshift = 7
-#            self.array[:] = [self._sentinel, self._sentinel]
+            dict(FixedDict.__iter__(self)) # fsckish
     def __iter__(self):
         for item in self.array:
             if item != self._sentinel:
@@ -293,6 +194,8 @@ class FixedDict(collections.abc.MutableMapping):
 
 class Dict(FixedDict):
     def __init__(self, id=b'', rep=None):
+        if rep is None:
+            rep = Rep()
         super().__init__(rep.manager.idsize*2, self._key, id, rep)
         self._alloc = self._rep.manager.alloc
         self._fetch = self._rep.manager.fetch
@@ -310,7 +213,7 @@ class Dict(FixedDict):
                 return self._fetch(storedkeyval[sz:])
         raise KeyError(key)
     def __setitem__(self, key, val):
-        self.update([key, val])
+        self.update([[key, val]])
     def update(self, keyitemseq = {}, **keyitemkws):
         # when/if parallel allocs are used, this function would need to be reorganized to use them.
         alloc = self._alloc
@@ -331,14 +234,14 @@ class Dict(FixedDict):
                         storedkeyid = storedkeyval[:self._idsize]
                         storedkey = self._fetch(storedkeyid)
                         if storedkey == key:
-                            yield [keyhash, storedkeyid + alloc(val)]
+                            yield [keyhash, storedkeyid + alloc(item)]
                             continue
                         assert keyhash != hash(storedkey)
-                    yield [keyhash, alloc(key) + alloc(val)]
-            super().update(keyhashitems())
+                    yield [keyhash, alloc(key) + alloc(item)]
+            super().update(list(keyhashitems()))
         else:
             super().update([
-                [hash(key), alloc(key) + alloc(val)]
+                [hash(key), alloc(key) + alloc(item)]
                 for key, item in keyitems
             ])
             
@@ -375,12 +278,20 @@ class Dict(FixedDict):
         raise KeyError(key)
 
 if __name__ == '__main__':
-    from .i import fI as manager
-    doc = Dict(rep=Rep(manager=manager()))
+    #from .i import fI as manager
+    import random
+    #doc = Dict(rep=Rep(manager=manager()))
+    doc = Dict()
     cmp = {}
     for x in tqdm.tqdm(range(17)):
-        val = str(x).encode()
-        doc.update([[val,val]])
+        vals = [[f'{x}-{y}'.encode(),f'{y}-{x}'.encode()] for y in range(random.randint(0,(x+1)*2))]
+        dbg_prev = dict(cmp)
+        if len(vals) == 1:
+            doc[vals[0][0]] = vals[0][1]
+            cmp[vals[0][0]] = vals[0][1]
+        else:
+            doc.update(vals)
+            cmp.update(vals)
         #doc[val] = val
-        cmp[val] = val
+        #cmp[val] = val
         assert dict(doc.items()) == cmp
