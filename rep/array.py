@@ -87,6 +87,7 @@ class Array(FixedArray):
         super().__init__(rep.manager.idsize, id, rep)
         self._alloc = rep.manager.alloc
         self._fetch = rep.manager.fetch
+        self._dealloc = rep.manager.dealloc
     def __getitem__(self, slice):
         fetch = self._fetch
         if type(slice) is int:
@@ -99,30 +100,41 @@ class Array(FixedArray):
             yield fetch(id)
     def __setitem__(self, slice, values):
         alloc = self._alloc
+        dealloc = self._dealloc
         if type(slice) is int:
-            super().__setitem__(slice, alloc(values))
+            old_ids = [super().__getitem__(slice)]
+            super().__setitem__(slice, alloc(values, replacing=old_ids))
         else:
-            super().__setitem__(slice, IterableWithLength((alloc(value) for value in values), len(values)))
+            old_ids = super().__getitem__(slice)
+            super().__setitem__(slice, IterableWithLength((alloc(value, replacing=old_ids) for value in values), len(values)))
+        for old_id in old_ids:
+            dealloc(old_id)
 
 if __name__ == '__main__':
-    import random, tqdm
-    text = b'The quick brown fox jumped over the lazy dog.'
-    doc = Array()
-    cmp = []
-    assert doc[:] == cmp
-    with tqdm.tqdm(range(32), desc=b','.join(cmp).decode(), leave=False) as pbar:
-        for iter in pbar:
-            dest = [random.randint(0,len(doc)) for x in range(2)]
-            dest.sort()
-            srcs = []
-            srcslen = random.randint(0,3)
-            for idx in range(srcslen):
-                src = [random.randint(0,len(text)) for x in range(2)]
-                src.sort()
-                srcs.append(text[src[0]:src[1]])
-            assert doc[dest[0]:dest[1]] == cmp[dest[0]:dest[1]]
-            doc[dest[0]:dest[1]] = srcs
-            cmp[dest[0]:dest[1]] = srcs
-            assert cmp == doc[:]
-            assert cmp == list(doc)
-            pbar.desc = b','.join(cmp).decode()
+    import random, time, tqdm
+    for seed in [1745318607,int(time.time())]:
+        print(f'random.seed({seed})')
+        random.seed(seed)
+        text = b'The quick brown fox jumped over the lazy dog.'
+        doc = Array()
+        cmp = []
+        assert doc[:] == cmp
+        with tqdm.tqdm(range(1), desc=b','.join(cmp).decode(), leave=False) as pbar:
+            for iter in pbar:
+                dest = [random.randint(0,len(doc)) for x in range(2)]
+                dest.sort()
+                srcs = []
+                srcslen = random.randint(0,3)
+                for idx in range(srcslen):
+                    src = [random.randint(0,len(text)) for x in range(2)]
+                    src.sort()
+                    srcs.append(text[src[0]:src[1]])
+                assert doc[dest[0]:dest[1]] == cmp[dest[0]:dest[1]]
+                doc[dest[0]:dest[1]] = srcs
+                cmp[dest[0]:dest[1]] = srcs
+                assert cmp == doc[:]
+                assert cmp == list(doc)
+                pbar.desc = b','.join(cmp).decode()
+        doc[:] = b''
+        if hasattr(doc.doc.rep.manager, 'shrink'):
+            doc.doc.rep.manager.shrink()

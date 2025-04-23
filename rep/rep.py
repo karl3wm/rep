@@ -1,4 +1,5 @@
 from .r import aR as manager
+#from .i import fI as manager
 
 import tqdm
 
@@ -7,10 +8,10 @@ class Rep:
         if manager is None:
             manager = globals()['manager']()
         self.manager = manager
-    def alloc(self, data):
+    def alloc(self, data, replacing=b''):
         sz = self.manager.allocsize
         return b''.join([
-            self.manager.alloc(data[off:off+sz])
+            self.manager.alloc(data[off:off+sz], replacing=[replacing[idx:idx+sz] for idx in range(0,len(replacing),sz)])
             for off in range(0,len(data),sz)
         ])
     def fetch(self, id):
@@ -70,11 +71,15 @@ class Document:
             last = self.manager.fetch(self._ids[stop_id])
             data[-1] = data[-1] + last[outer_off:]
 
-        new_ids = [self.manager.alloc(data_item) for data_item in data]
-        self._ids[start_id:len(new_ids)] = new_ids
+        old_ids = self._ids[start_id:start_id+len(new_ids)]
+        new_ids = [self.manager.alloc(data_item, replacing=old_ids) for data_item in data]
+        self._ids[start_id:start_id+len(new_ids)] = new_ids
 
         _dbg_old_data[slice] = data
         assert _dbg_old_data == self[:]
+
+        if old_id in old_ids:
+            self.rep.manager.dealloc(old_id)
 
 import bisect, itertools
 class ResizeableDocument:
@@ -140,6 +145,7 @@ class ResizeableDocument:
         assert step == 1
         start_idx, start_off = self._off2idxoff(start)
         stop_idx, stop_off = self._off2idxoff(stop, start_idx)
+        old_ids = self._ids[start_idx:stop_idx]
 
         # note: additional prefix and suffix material could be added to defrag the content so long as idx count did not increase
         if start_off > 0:
@@ -166,26 +172,26 @@ class ResizeableDocument:
             if suffixlen + prefixlen + datalen > 0:
                 piece = prefix + data[:] + suffix[:suffixoff]
                 new_sizes.append(len(piece))
-                new_ids.append(alloc(piece))
+                new_ids.append(alloc(piece, replacing=old_ids))
         else:
             off = sz - prefixlen
             piece = prefix + data[:off]
             new_sizes.append(len(piece))
-            new_ids.append(alloc(piece))
+            new_ids.append(alloc(piece, replacing=old_ids))
             offs = list(range(off, datalen, sz))
             for off in offs[:-1]:
                 piece = data[off:off+sz]
                 new_sizes.append(len(piece))
-                new_ids.append(alloc(piece))
+                new_ids.append(alloc(piece, replacing=old_ids))
             tail = data[offs[-1]:]
             suffixoff = sz - len(tail)
             piece = tail + suffix[:suffixoff]
             new_sizes.append(len(piece))
-            new_ids.append(alloc(piece))
+            new_ids.append(alloc(piece, replacing=old_ids))
         if suffixoff < suffixlen:
             piece = suffix[suffixoff:]
             new_sizes.append(len(piece))
-            new_ids.append(alloc(piece))
+            new_ids.append(alloc(piece, replacing=old_ids))
         self._ids[start_idx:stop_idx] = new_ids#[self.rep.manager.alloc(data_item) for data_item in data_array]
         self._sizes[start_idx:stop_idx] = new_sizes#[len(data_item) for data_item in data_array]
         self._offs[start_idx:] = itertools.accumulate(self._sizes[start_idx:], initial=self._offs[start_idx])

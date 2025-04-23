@@ -34,7 +34,10 @@ class aR:
         self.allocsize = S - len(_dh)
         self.idsize = len(id(_dh))
 
-    def alloc(self, data):
+    def dealloc(self, id):
+        pass
+
+    def alloc(self, data, replacing=[]):
         th = current_thread()
         _ds = self._ds
         _d = _ds.get(th)
