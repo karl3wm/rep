@@ -2,16 +2,20 @@ import mmap, os
 
 # current structure
 # offsets are in qwords which are usually 8 bytes
+# endianness reflects that of the architecture
 # header:
 #   0: qword containing global offset in qwords of first deallocated region
 # deallocated region:
-#   0: global offset in qwords of next deallocated region
+#   0: qword containing global offset in qwords of next deallocated region
 #   1q: total length of this deallocated region in qwords (at least 2)
 # allocated region:
-#   0: bytelength of the data in this allocated region 
-#   1q: data
+#   0: qword containing bytelength of the data in this allocated region 
+#   1q: bytes of data
+#   the total reserved space of an allocated region is rounded up to qwords
+#   with a minimum size of 2 qwords
 # id:
 #   a single qword containing the offset in qwords of an allocated region
+# all allocated regions can be found as the gaps between deallocated regions
 
 class fI:
     idsize = memoryview(bytes(0)).cast('Q').itemsize
@@ -47,17 +51,9 @@ class fI:
     def alloc(self, data, replacing=[]):
         self.fsck()
         l8 = max((len(data)+self.idsize-1)//self.idsize,1) + 1
-        addr8 = 0
-        assert self.q[addr8] != 0
-        dbg_seen = {}
-        while self.q[addr8] != 0:
-            assert addr8 not in dbg_seen
-            prev8 = addr8
-            addr8 = self.q[prev8]
-            assert prev8 != addr8
-            dbg_seen[prev8] = addr8
-            assert self.q[addr8+1] + addr8 <= self.yq
-            if (self.q[addr8+1] == l8 and self.q[addr8] != 0) or self.q[addr8+1] >= l8+2:
+        for addr8, _l8, prev8, next8 in self._all_regions(True,True,True):
+            if (_l8 == l8 and next8 != 0) or _l8 >= l8+2:
+                    # why does next need to be nonzero to use an exactly matching thing ...?
                 # found region
                 break
         else:
@@ -102,16 +98,7 @@ class fI:
         addr8 = memoryview(id).cast('Q')[0]
         return self.q[addr8]
     def fsck(self):
-        regions = []
-        seen_regions = set()
-        prev8 = 0; addr8 = self.q[prev8]
-        while addr8 != 0:
-            assert addr8 not in seen_regions
-            seen_regions.add(addr8)
-            regions.append([addr8, self.q[addr8+1]])
-            prev8 = addr8
-            addr8 = self.q[prev8]
-            assert prev8 != addr8
+        regions = list(self._all_regions(include_l8=True)) # [[addr8, l8],...]
         regions.sort(reverse=True)
         passed_regions = []
         addr8 = 1
@@ -127,17 +114,32 @@ class fI:
                 assert l8 <= self.yq - addr8
                 addr8 += l8
         assert addr8 == self.yq
-    def _all_regions(self, add_prev=False):
+    def _all_regions(self, add_prev=False, include_l8=False, add_next=False):
         prev8 = 0; addr8 = self.q[prev8]
+        seen_regions = set()
+        [addr8_obj, l8_obj, prev8_obj, next8_obj] = [[None] for x in range(4)]
+        if add_prev or include_l8 or add_next:
+            yield_list = True
+            yield_objs = [
+                addr8_obj,
+                l8_obj if include_l8 else [],
+                prev8_obj if add_prev else [],
+                next8_obj if add_next else []
+            ]
+        else:
+            yield_objs = addr8_obj
         while addr8 != 0:
-            assert addr8 != prev8
-            assert self.q[addr8+1] + addr8 <= self.yq
-            if add_prev:
-                yield [addr8, prev8]
-            else:
-                yield addr8
-            prev8 = addr8; addr8 = self.q[prev8]
+            assert addr8 not in seen_regions
+            seen_regions.add(addr8)
+            l8 = self.q[addr8+1]
+            next8 = self.q[addr8]
+            [addr8_obj[0], l8_obj[0], prev8_obj[0], next8_obj[0]] = [addr8, l8, prev8, next8]
+            item = sum(yield_objs[1:],yield_objs[0])
+            assert l8 + addr8 <= self.yq
+            yield item
+            prev8, addr8 = [addr8, next8]
     def shrink(self):
+        #import pdb; pdb.set_trace()
         self.fsck()
         unused = self._calc_unused()
         #regions = []
