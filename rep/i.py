@@ -1,7 +1,17 @@
 import mmap, os
 
-# note: this uses a linked list of deallocated regions,
-#       but does not merge them, potentially causing fragmentation
+# current structure
+# offsets are in qwords which are usually 8 bytes
+# header:
+#   0: qword containing global offset in qwords of first deallocated region
+# deallocated region:
+#   0: global offset in qwords of next deallocated region
+#   1q: total length of this deallocated region in qwords (at least 2)
+# allocated region:
+#   0: bytelength of the data in this allocated region 
+#   1q: data
+# id:
+#   a single qword containing the offset in qwords of an allocated region
 
 class fI:
     idsize = memoryview(bytes(0)).cast('Q').itemsize
@@ -93,8 +103,11 @@ class fI:
         return self.q[addr8]
     def fsck(self):
         regions = []
+        seen_regions = set()
         prev8 = 0; addr8 = self.q[prev8]
         while addr8 != 0:
+            assert addr8 not in seen_regions
+            seen_regions.add(addr8)
             regions.append([addr8, self.q[addr8+1]])
             prev8 = addr8
             addr8 = self.q[prev8]
@@ -114,19 +127,31 @@ class fI:
                 assert l8 <= self.yq - addr8
                 addr8 += l8
         assert addr8 == self.yq
-    def shrink(self):
-        self.fsck()
-        unused = 0
-        regions = []
+    def _all_regions(self, add_prev=False):
         prev8 = 0; addr8 = self.q[prev8]
         while addr8 != 0:
-            regions.append(prev8)#[addr8, prev8])
-            prev8 = addr8
-            addr8 = self.q[prev8]
-            assert prev8 != addr8
-            unused += self.q[prev8+1]
+            assert addr8 != prev8
+            assert self.q[addr8+1] + addr8 <= self.yq
+            if add_prev:
+                yield [addr8, prev8]
+            else:
+                yield addr8
+            prev8 = addr8; addr8 = self.q[prev8]
+    def shrink(self):
+        self.fsck()
+        unused = self._calc_unused()
+        #regions = []
+        #prev8 = 0; addr8 = self.q[prev8]
+        #while addr8 != 0:
+        #    regions.append(prev8)#[addr8, prev8])
+        #    prev8 = addr8
+        #    addr8 = self.q[prev8]
+        #    assert prev8 != addr8
+        #    unused += self.q[prev8+1]
         # merge regions
-        regions.sort(key=lambda prev8:self.q[prev8])
+
+        ###### the current issue is that region 1 has moved beyond region 2 when region 2 is reached
+
         # idx   head    prev
         # 0     1       5
         # 1     5       0 <-
@@ -135,16 +160,22 @@ class fI:
         #   q[5] == 11
         #   q[0] == 1
         #   q[1] == 11
-        for idx in range(1, len(regions)):
+        #dbg_passed_regions = []
+        # quick inefficent solution to iterating unallocated regions while they are changing
+        regions = list(self._all_regions(True))
+        regions.sort(reverse=True)
+        while len(regions) > 1:
             self.fsck()
-            prev0, prev1 = regions[idx-1:idx+1]
+            [head0, prev0], [head1, prev1] = [regions.pop(), regions[-1]]
+            #dbg_passed_regions.append(prev0)
             #head0, prev0 = regions[idx-1]
-            head0 = self.q[prev0]
+            #head0 = self.q[prev0]
             tail0 = self.q[head0+1] + head0
             #assert self.q[prev0] == head0 # <-
             #head1, prev1 = regions[idx]
-            head1 = self.q[prev1]
+            #head1 = self.q[prev1]
             tail1 = self.q[head1+1] + head1
+            assert head0 != head1
             #assert self.q[prev1] == head1
             self.fsck()
             if tail0 == head1:
@@ -167,14 +198,16 @@ class fI:
                 #regions[idx][0] = head0 # <-
                 assert self._calc_unused() == unused
                 self.fsck()
+                # quick inefficent solution to iterating unallocated regions while they are changing
+                regions = list(self._all_regions(True))
+                regions.sort(reverse=True)
             else:
                 assert tail0 < head1
             assert self._calc_unused() == unused
         # remove tail region
         self.fsck()
-        regions.sort(key=lambda prev8: self.q[prev8])
-        prev8 = regions[-1]
-        addr8 = self.q[prev8]
+        #regions.sort()
+        addr8, prev8 = regions[0]
         unused += 2 - self.q[addr8+1]
         y2 = (addr8+2)*self.idsize
         os.truncate(self.n, y2)
@@ -188,12 +221,4 @@ class fI:
         print('unused:', unused * self.idsize)
         print('total: ', self.yq * self.idsize)
     def _calc_unused(self):
-        unused = 0
-        prev8 = 0; addr8 = self.q[prev8]
-        while addr8 != 0:
-            assert self.q[addr8+1] + addr8 <= self.yq
-            prev8 = addr8
-            addr8 = self.q[prev8]
-            assert addr8 != prev8
-            unused += self.q[prev8+1]
-        return unused
+        return sum([self.q[addr8+1] for addr8 in self._all_regions()])
