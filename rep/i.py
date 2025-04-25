@@ -142,26 +142,9 @@ class fI:
         #import pdb; pdb.set_trace()
         self.fsck()
         unused = self._calc_unused()
-        #regions = []
-        #prev8 = 0; addr8 = self.q[prev8]
-        #while addr8 != 0:
-        #    regions.append(prev8)#[addr8, prev8])
-        #    prev8 = addr8
-        #    addr8 = self.q[prev8]
-        #    assert prev8 != addr8
-        #    unused += self.q[prev8+1]
+
         # merge regions
 
-        ###### the current issue is that region 1 has moved beyond region 2 when region 2 is reached
-
-        # idx   head    prev
-        # 0     1       5
-        # 1     5       0 <-
-        # 2     11      1
-        # note:
-        #   q[5] == 11
-        #   q[0] == 1
-        #   q[1] == 11
         #dbg_passed_regions = []
         # quick inefficent solution to iterating unallocated regions while they are changing
         regions = list(self._all_regions(True))
@@ -170,15 +153,9 @@ class fI:
             self.fsck()
             [head0, prev0], [head1, prev1] = [regions.pop(), regions[-1]]
             #dbg_passed_regions.append(prev0)
-            #head0, prev0 = regions[idx-1]
-            #head0 = self.q[prev0]
             tail0 = self.q[head0+1] + head0
-            #assert self.q[prev0] == head0 # <-
-            #head1, prev1 = regions[idx]
-            #head1 = self.q[prev1]
             tail1 = self.q[head1+1] + head1
             assert head0 != head1
-            #assert self.q[prev1] == head1
             self.fsck()
             if tail0 == head1:
                 # remove region0
